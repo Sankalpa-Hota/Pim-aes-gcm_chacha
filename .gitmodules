@@ -1,0 +1,3 @@
+[submodule "rtl/third_party/secworks_aes"]
+	path = rtl/third_party/secworks_aes
+	url = https://github.com/secworks/aes
