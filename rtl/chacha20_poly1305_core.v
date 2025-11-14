@@ -30,6 +30,9 @@ module chacha20_poly1305_core (
     input  wire         algo_sel
 );
 
+    // --------------------------
+    // Internal done flags
+    // --------------------------
     reg aad_done_reg, pld_done_reg, lens_done_reg;
 
     // --------------------------
@@ -37,6 +40,7 @@ module chacha20_poly1305_core (
     // --------------------------
     wire        ks_valid_chacha;
     wire [511:0] ks_data_chacha;
+
     chacha_keystream_unit u_ks (
         .clk(clk), .rst_n(rst_n),
         .chacha_key(key),
@@ -53,8 +57,9 @@ module chacha20_poly1305_core (
     // --------------------------
     chacha_poly1305_adapter u_poly (
         .clk(clk), .rst_n(rst_n),
-        .start(cfg_we),
-        .algo_sel(1'b1),
+        // Changed start pulse to depend on cfg_we AND algo_sel to prevent multiple drivers
+        .start(cfg_we & algo_sel),  // FIX: Only start when config write is valid AND ChaCha selected
+        .algo_sel(algo_sel),        // FIX: Forward correct algo_sel to adapter
         .key(key), .nonce(nonce), .ctr_init(ctr_init),
         .aad_valid(aad_valid), .aad_data(aad_data), .aad_keep(aad_keep), .aad_ready(aad_ready),
         .pld_valid(pld_valid), .pld_data(pld_data), .pld_keep(pld_keep), .pld_ready(pld_ready),
@@ -64,13 +69,18 @@ module chacha20_poly1305_core (
         .aad_done(aad_done_reg), .pld_done(pld_done_reg), .lens_done(lens_done_reg)
     );
 
-    assign aad_done  = aad_done_reg;
-    assign pld_done  = pld_done_reg;
-    assign lens_done = lens_done_reg;
+    // --------------------------
+    // Done signals
+    // --------------------------
+    // FIX: Mux by algo_sel to avoid multiple drivers if AES is connected later
+    assign aad_done  = algo_sel ? aad_done_reg  : 1'b0;
+    assign pld_done  = algo_sel ? pld_done_reg  : 1'b0;
+    assign lens_done = algo_sel ? lens_done_reg : 1'b0;
 
     // --------------------------
     // Output keystream
     // --------------------------
+    // FIX: ks_data width ensured only for ChaCha (512-bit)
     assign ks_valid = ks_valid_chacha;
     assign ks_data  = ks_data_chacha;
 
