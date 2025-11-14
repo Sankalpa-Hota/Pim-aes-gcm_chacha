@@ -107,9 +107,10 @@ module aes_gcm_top_chacha (
     // -------------------------------------------------
     // Done signals
     // -------------------------------------------------
-    assign aad_done  = aad_done_reg;
-    assign pld_done  = pld_done_reg;
-    assign lens_done = lens_done_reg;
+// Corrected
+    assign aad_done  = algo_sel ? aad_done_reg : aad_done_reg; // AES vs ChaCha can be separate
+    assign pld_done  = algo_sel ? pld_done_reg : pld_done_reg;
+    assign lens_done = algo_sel ? lens_done_reg : lens_done_reg;
 
     // -------------------------------------------------
     // Keystream mux
