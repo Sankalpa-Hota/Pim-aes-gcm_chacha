@@ -1,243 +1,231 @@
-Design Note: AES–ChaCha Keystream Unification
-1. Goal
+# AES–ChaCha Keystream Merge Design Note
 
-Enable the existing AES-GCM engine to share its keystream datapath with a ChaCha-based mode, so that:
+---
 
-ctr_xor can consume keystream from either AES or ChaCha through the same interface.
+## What this change is
 
-Existing AES-GCM behavior remains intact when ChaCha is disabled.
+This change extends the original **PIM AES-GCM** engine so that the **CTR XOR datapath** can draw keystream from:
 
-Modes:
+- the existing **AES-CTR** path, or  
+- a new **ChaCha-based keystream unit**,
 
-algo_sel = 0 → AES-GCM (original behavior).
+selected by a single **algorithm-select CSR**.
 
-algo_sel = 1 → ChaCha keystream feeds ctr_xor (toward ChaCha20-Poly1305).
+- `algo_sel = 0` → AES-GCM mode (original behavior)  
+- `algo_sel = 1` → CTR keystream comes from ChaCha (first step toward ChaCha20-Poly1305)
 
-2. Keystream Interface Refactor (ctr_xor ↔ datapath)
+AES-GCM GHASH / tag logic is left unchanged in this revision.
 
-Files touched: rtl/aes_gcm_datapath.v
+---
 
-What changed
+## Files touched
 
-Introduced a generic keystream interface between ctr_xor and the rest of the datapath:
+- `rtl/aes_gcm_top.v`
+- `rtl/aes_gcm_datapath.v`
+- `rtl/chacha_keystream_unit.v` (new)
+- `syn/genus_compile_gcm.tcl` (flow-related changes, if any)
+- `docs/DESIGN_NOTE_AES_CHACHA.md` (this document)
 
-ks_req – request next 128-bit keystream block
+---
 
-ks_valid – selected producer indicates data is valid
+## 1. Top-level control: `aes_gcm_top.v`
 
-ks_data – 128-bit keystream block
+### What changed
 
-Split the old “flat” keystream signals into:
+- Added a **1-bit algorithm-select CSR input**:
+  - `algo_sel`
+    - `0` = AES-GCM keystream (original)
+    - `1` = ChaCha-based keystream
 
-Generic: ks_req, ks_valid, ks_data (used by ctr_xor only)
+- Passed `algo_sel` down into `aes_gcm_datapath`.
 
-AES-specific: ks_valid_aes, ks_data_aes
+### Why
 
-Left the ctr_xor instantiation unchanged: it still only sees the generic ks_* signals.
+- Gives the host / SSD controller a single bit to choose the keystream algorithm.
+- Keeps the external interface almost unchanged (one extra CSR bit).
+- Concentrates algorithm choice at the top level while leaving the detailed muxing in the datapath.
 
-Why
+---
 
-Previously, ctr_xor was implicitly hard-wired to AES via a single ks_data_reg and ks_valid driven only by AES.
+## 2. Datapath keystream interface: `aes_gcm_datapath.v`
 
-By making ks_* generic and introducing ks_*_aes, we can later plug in other keystream producers (ChaCha) without touching ctr_xor or external ports.
+### What changed
 
-3. AES Path: Explicit Keystream Producer
+1. Introduced a **generic keystream interface** between `ctr_xor` and the keystream generator:
 
-Files touched: rtl/aes_gcm_datapath.v
+   - `ks_req`   – request a new 128-bit keystream block  
+   - `ks_valid` – producer indicates `ks_data` is valid  
+   - `ks_data`  – 128-bit keystream block  
 
-What changed
+2. Refactored AES-specific signals:
 
-AES result capture logic now fills AES-local keystream signals:
+   - Added `ks_valid_aes` and `ks_data_aes` for the AES path.
+   - `ctr_xor` now only sees the generic `ks_req`, `ks_valid`, `ks_data`.
+   - The AES path only drives its local `ks_valid_aes` / `ks_data_aes`.
 
-On AES CTR consumption:
+### Why
 
-Write aes_result into ks_data_aes.
+- Before, `ctr_xor` was effectively hard-wired to AES via a single register and valid signal.
+- The new structure makes **keystream generation pluggable**:
+  - AES becomes one producer behind the interface.
+  - ChaCha can be added as another producer without modifying `ctr_xor`.
 
-Assert ks_valid_aes when aes_result_valid && ctr_consuming.
+---
 
-Tagmask/other uses of AES output remain unchanged.
+## 3. AES path: explicit keystream producer
 
-The generic interface is initially driven only from AES:
+### What changed
 
-ks_valid = ks_valid_aes
+- AES result capture logic now:
 
-ks_data = ks_data_aes
+  - Writes the AES CTR result into `ks_data_aes` when the CTR path is consuming AES output.
+  - Asserts `ks_valid_aes` when that data is valid (typically one-cycle pulse).
+  - Leaves tagmask / GHASH related uses of AES output as they were.
 
-Why
+- The generic interface is initially driven **only** from the AES path:
 
-This makes AES CTR look like a clean “producer” behind the generic interface.
+  - `ks_valid = ks_valid_aes`  
+  - `ks_data  = ks_data_aes`
 
-The rest of the GCM datapath (GHASH, tagmask, lengths) remains untouched; only the keystream path is abstracted.
+### Why
 
-It preserves bit-exact AES-GCM behavior when algo_sel = 0 while preparing the design for another producer.
+- Makes AES CTR look like a clean **“keystream producer”** instead of directly feeding `ctr_xor`.
+- Ensures that with `algo_sel = 0`, the AES-GCM behavior (timing + functionality) matches the original design.
+- Prepares the datapath so a second producer (ChaCha) can be selected with a small mux instead of invasive edits.
 
-4. New ChaCha Keystream Unit
+---
 
-Files touched: rtl/chacha_keystream_unit.v (new), rtl/aes_gcm_datapath.v (instantiation)
+## 4. New ChaCha keystream unit: `chacha_keystream_unit.v`
 
-What changed
+### What changed
 
-Added a new module chacha_keystream_unit that:
+- Added a new module `chacha_keystream_unit` that:
 
-Latches ChaCha configuration:
+  **Configuration**
 
-chacha_key
+  - Latches ChaCha configuration when `cfg_we` is asserted:
+    - `chacha_key`
+    - `chacha_nonce`
+    - `chacha_ctr_init`
 
-chacha_nonce
+  **Core interface**
 
-chacha_ctr_init
+  - Connects to `chacha_core` using its existing ports:
+    - key, counter, IV, rounds, `ready`, `data_out_valid`, `data_out`.
 
-cfg_we (write enable for config)
+  **Keystream interface**
 
-Connects to chacha_core using the existing interface (key, ctr, iv, rounds, data_out, ready, valid).
+  - Implements the same handshake as the AES keystream path:
+    - Input: `ks_req`
+    - Outputs: `ks_valid`, `ks_data[127:0]`
 
-Implements the same unified keystream interface as AES:
+- First implementation policy (simple, functional baseline):
 
-Input: ks_req
+  - For each `ks_req` when `chacha_core` is ready:
+    - Assert `next` to start one ChaCha block.
+    - Wait for `data_out_valid`.
+    - Take the **lower 128 bits** of the 512-bit ChaCha output as `ks_data`.
+    - Pulse `ks_valid` for one cycle.
+    - Increment an internal block counter for the next request.
 
-Outputs: ks_valid, ks_data (128-bit)
+- In `aes_gcm_datapath.v`, the unit is instantiated and wired to:
 
-Current behavior (first version):
+  - `chacha_key`      ← reuse the active AES key register for now.  
+  - `chacha_nonce`    ← drive from `iv_in`.  
+  - `chacha_ctr_init` ← set to a fixed initial counter (e.g., 1).  
+  - `cfg_we`          ← currently tied low (will be controlled via CSRs in future).  
+  - `ks_req`          ← generic `ks_req` gated by ChaCha mode selection.
 
-For each ks_req when chacha_core is ready:
+### Why
 
-Issue a single next pulse to the core.
+- Encapsulates all ChaCha-specific details (key/nonce layout, counter/IV mapping, handshake with `chacha_core`) in one module.
+- Presents the **same `ks_req` / `ks_valid` / `ks_data` interface** as AES, keeping the datapath mux simple.
+- The “one ChaCha block → one 128-bit keystream word” policy is easy to validate and correct by construction; full 512-bit reuse is a follow-on optimization.
 
-Wait for data_out_valid.
+---
 
-Take the lower 128 bits of the 512-bit ChaCha block as ks_data.
+## 5. Keystream selection mux: AES vs ChaCha
 
-Pulse ks_valid for one cycle.
+### What changed
 
-Increment an internal 32-bit block counter for the next request.
+- Added ChaCha-specific keystream signals inside the datapath:
 
-aes_gcm_datapath now instantiates chacha_keystream_unit and wires:
+  - `ks_valid_chacha`
+  - `ks_data_chacha`
 
-chacha_key ← internal active AES key register (for now)
+- Implemented a **2-to-1 mux** that drives the generic interface:
 
-chacha_nonce ← iv_in (95:0)
+  - If `algo_sel = 0` (AES mode):
+    - `ks_valid = ks_valid_aes`
+    - `ks_data  = ks_data_aes`
 
-chacha_ctr_init ← constant 32'd1 (initial block counter)
+  - If `algo_sel = 1` (ChaCha mode):
+    - `ks_valid = ks_valid_chacha`
+    - `ks_data  = ks_data_chacha`
 
-cfg_we ← currently tied low (TODO: drive from CSRs in ChaCha mode)
+- Gated `ks_req` into the ChaCha unit:
 
-ks_req ← gated version of generic ks_req when ChaCha mode is selected
+  - ChaCha only sees `ks_req` when it is the selected algorithm.
 
-Why
+### Why
 
-Encapsulates all ChaCha specifics (key/nonce mapping, ctr/iv packing, handshake with chacha_core) inside a single unit.
+- Centralizes algorithm selection in a single, obvious place in the datapath.
+- Keeps `ctr_xor` and GHASH logic unchanged and unaware of algorithm choice.
+- Ensures only one producer is active at a time, avoiding conflicting drivers on the keystream interface.
 
-Presents the same simple ks_req / ks_valid / ks_data interface to aes_gcm_datapath, making it symmetric with AES.
+---
 
-The first-pass “1× ks_req → 1× 128-bit word” policy is:
+## 6. Algorithm select: `algo_sel`
 
-Functionally correct.
+### What changed
 
-Easy to reason about with the existing ctr_xor design.
+- In the top level (`aes_gcm_top.v`):
 
-Leaves room for a later optimization to reuse all 512 bits (4× 128-bit words).
+  - Added `algo_sel` as a new CSR bit.
 
-5. Keystream Mux: AES vs ChaCha
+- In the datapath (`aes_gcm_datapath.v`):
 
-Files touched: rtl/aes_gcm_datapath.v
+  - Added `algo_sel` to the datapath’s input ports.
+  - Derived an internal wire (e.g., `algo_is_chacha`) directly from `algo_sel`.
+  - Used `algo_is_chacha` to:
+    - Gate `ks_req` into `chacha_keystream_unit`.
+    - Select between AES and ChaCha outputs in the keystream mux.
 
-What changed
+### Why
 
-Introduced ChaCha-specific keystream signals:
+- Provides a single, clear control knob for **which keystream algorithm is active**.
+- Keeps the rest of the control FSM and GHASH/tag logic identical to the AES-GCM-only design.
 
-ks_valid_chacha
+---
 
-ks_data_chacha
+## Behavior by mode
 
-Added a simple 2-to-1 mux that drives the generic keystream interface:
+### AES-GCM mode (`algo_sel = 0`)
 
-ks_valid = algo_is_chacha ? ks_valid_chacha : ks_valid_aes
+- Keystream is produced by the original AES CTR path.
+- `ctr_xor` and GHASH see the same behavior as in the original design.
+- Design remains backward-compatible with AES-GCM-only use.
 
-ks_data = algo_is_chacha ? ks_data_chacha : ks_data_aes
+### ChaCha keystream mode (`algo_sel = 1`)
 
-When ChaCha is selected, ks_req is also gated before it reaches chacha_keystream_unit:
+- Keystream is produced by `chacha_keystream_unit` using `chacha_core`.
+- AES core can still be used for other GCM functions (e.g., tagmask), but CTR keystream is ChaCha-based.
+- Authentication/tag path is still GCM-style; Poly1305 is not yet implemented.
 
-AES always sees the full AES CTR/control context.
+---
 
-ChaCha only sees ks_req when algo_is_chacha = 1.
+## Current limitations and next steps
 
-Why
+### Limitations
 
-Centralizes the “which producer is active?” decision in one place inside the datapath.
+- ChaCha configuration (`cfg_we`, key/nonce/counter) is still partially stubbed and not fully driven by dedicated CSRs.
+- Only 128 bits of the 512-bit ChaCha result are used per block; 3/4 of the core output is currently unused.
+- Full ChaCha20-Poly1305 support (Poly1305 tag, mode-specific control, tag verify) is not yet present.
 
-Keeps ctr_xor oblivious to algorithm choice.
+### Planned follow-ups
 
-Ensures only the selected producer is actually driven by the live keystream request.
+1. Connect ChaCha configuration registers to proper CSRs when `algo_sel = 1`.
+2. Extend `chacha_keystream_unit` to reuse all 512 bits from `chacha_core` (4 × 128-bit keystream outputs per block).
+3. Add a Poly1305 tag pipeline and mode control to support a complete ChaCha20-Poly1305 mode alongside AES-GCM.
 
-6. Algorithm Select CSR (algo_sel)
-
-Files touched: rtl/aes_gcm_top.v, rtl/aes_gcm_datapath.v
-
-What changed
-
-Added a 1-bit algorithm select input at the top level:
-
-algo_sel:
-
-0 → AES-GCM mode
-
-1 → ChaCha-mode keystream
-
-Propagated algo_sel into aes_gcm_datapath.
-
-Introduced an internal decoded signal in the datapath:
-
-algo_is_chacha = algo_sel;
-
-algo_is_chacha is used to:
-
-Gate ks_req into chacha_keystream_unit.
-
-Select AES vs ChaCha in the keystream mux.
-
-Why
-
-Provides a single CSR bit under host/SSD controller control to choose the active keystream algorithm.
-
-Keeps algorithm selection out of ctr_xor and out of the lower RTL blocks, minimizing intrusion into existing logic.
-
-7. Behavioral Summary
-AES-only mode (algo_sel = 0)
-
-algo_is_chacha = 0
-
-ks_req → AES CTR keystream path only.
-
-ks_valid / ks_data come from ks_valid_aes / ks_data_aes.
-
-ChaCha path is instantiated but effectively idle.
-
-Functional behavior matches the original AES-GCM design.
-
-ChaCha keystream mode (algo_sel = 1)
-
-algo_is_chacha = 1
-
-ks_req is forwarded to chacha_keystream_unit.
-
-ks_valid / ks_data come from ChaCha’s FSM (one 128-bit word per ChaCha block).
-
-GHASH / tag path is still AES-oriented; a full ChaCha20-Poly1305 tag pipeline is not yet implemented.
-
-8. Current Limitations and Next Steps
-
-Current limitations:
-
-cfg_we for ChaCha is tied low; key/nonce/counter are not yet driven from a dedicated ChaCha CSR path.
-
-ChaCha block utilization is suboptimal: only 128/512 bits are used per block.
-
-Tag generation remains AES-GCM-specific; there is no Poly1305 path yet.
-
-Planned next steps:
-
-Drive ChaCha key/nonce/counter registers from mode-aware CSRs when algo_sel = 1.
-
-Enhance chacha_keystream_unit to reuse each 512-bit ChaCha output as 4× 128-bit keystream blocks.
-
-Add a Poly1305/tag pipeline and top-level mode control to complete a proper ChaCha20-Poly1305 datapath.
+---
