@@ -48,7 +48,7 @@ module chacha_keystream_unit (
     reg  [31:0] ctr_next;
 
     // Map nonce + counter into ctr64/iv64 like your chacha_core expects
-    wire [63:0] ctr64 = {nonce_reg[31:0], ctr_reg};
+    wire [63:0] ctr64 = {ctr_reg, nonce_reg[31:0]}; // corrected ordering
     wire [63:0] iv64  = nonce_reg[95:32];
 
     chacha_core u_chacha_core (
