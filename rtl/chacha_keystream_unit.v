@@ -1,10 +1,12 @@
 `default_nettype none
+// chacha_keystream_unit.v
+// Produces one 512-bit ChaCha block on request (ks_req). Minimal changes from Original
 
 module chacha_keystream_unit (
     input  wire         clk,
     input  wire         rst_n,
 
-    // Configuration (we’ll drive these from AES-GCM key/IV regs in ChaCha mode)
+    // Configuration (driven by AES-GCM regs in ChaCha mode)
     input  wire [255:0] chacha_key,
     input  wire [95:0]  chacha_nonce,
     input  wire [31:0]  chacha_ctr_init,
@@ -13,7 +15,7 @@ module chacha_keystream_unit (
     // Unified keystream interface for ctr_xor
     input  wire         ks_req,
     output reg          ks_valid,
-    output reg  [127:0] ks_data
+    output reg  [511:0] ks_data      // CHACHA-MOD: wider to 512 bits
 );
 
     // --------------------------------------------------------------------
@@ -36,7 +38,7 @@ module chacha_keystream_unit (
     end
 
     // --------------------------------------------------------------------
-    // Wires to chacha_core (stub or real)
+    // Wires to chacha_core (uses your chacha_core)
     // --------------------------------------------------------------------
     wire        core_ready;
     wire        core_data_valid;
@@ -45,7 +47,7 @@ module chacha_keystream_unit (
     reg         core_init_reg, core_next_reg;
     reg  [31:0] ctr_next;
 
-    // Map nonce + counter into ctr64/iv64 like the inner core
+    // Map nonce + counter into ctr64/iv64 like your chacha_core expects
     wire [63:0] ctr64 = {nonce_reg[31:0], ctr_reg};
     wire [63:0] iv64  = nonce_reg[95:32];
 
@@ -54,11 +56,9 @@ module chacha_keystream_unit (
         .reset_n      (rst_n),
         .init         (core_init_reg),
         .next         (core_next_reg),
-        .keylen       (1'b1),
         .key          (key_reg),
         .ctr          (ctr64),
         .iv           (iv64),
-        .rounds       (5'h14),
         .data_in      (512'h0),
         .ready        (core_ready),
         .data_out     (core_data_out),
@@ -66,8 +66,7 @@ module chacha_keystream_unit (
     );
 
     // --------------------------------------------------------------------
-    // Simple FSM: one ChaCha block → one 128-bit keystream word
-    // (we only use core_data_out[127:0] for now)
+    // Simple FSM: produce one 512-bit block per ks_req
     // --------------------------------------------------------------------
     localparam S_IDLE  = 2'd0;
     localparam S_WAIT  = 2'd1;
@@ -94,13 +93,13 @@ module chacha_keystream_unit (
         ctr_next   = ctr_reg;
 
         ks_valid   = 1'b0;
-        ks_data    = 128'h0;
+        ks_data    = 512'h0;
 
         case (state_reg)
             S_IDLE: begin
                 // Accept a keystream request when core is ready
                 if (ks_req && core_ready) begin
-                    // For first real design we can just use .next
+                    // request a new block
                     core_next_reg = 1'b1;
                     state_next    = S_WAIT;
                 end
@@ -108,8 +107,8 @@ module chacha_keystream_unit (
 
             S_WAIT: begin
                 if (core_data_valid) begin
-                    // Grab lower 128 bits of ChaCha output as keystream
-                    ks_data    = core_data_out[127:0];
+                    // Grab entire 512-bit ChaCha output
+                    ks_data    = core_data_out;
                     ks_valid   = 1'b1;
                     // Bump counter for next block
                     ctr_next   = ctr_reg + 1;
@@ -118,8 +117,7 @@ module chacha_keystream_unit (
             end
 
             S_OUT: begin
-                // We asserted ks_valid for one cycle in S_WAIT.
-                // Go back to IDLE and wait for next ks_req.
+                // One-cycle ks_valid, then go back to IDLE
                 state_next = S_IDLE;
             end
 
@@ -128,5 +126,8 @@ module chacha_keystream_unit (
     end
 
 endmodule
+
+`default_nettype wire
+
 
 `default_nettype wire
