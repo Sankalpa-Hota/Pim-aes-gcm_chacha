@@ -30,9 +30,7 @@ module chacha20_poly1305_core (
     input  wire         algo_sel
 );
 
-    // --------------------------
-    // Internal done flags (must be wire, not reg)
-    // --------------------------
+    // Done flags (internal)
     wire aad_done_reg, pld_done_reg, lens_done_reg;
 
     // --------------------------
@@ -57,7 +55,7 @@ module chacha20_poly1305_core (
     // --------------------------
     chacha_poly1305_adapter u_poly (
         .clk(clk), .rst_n(rst_n),
-        .start(cfg_we & algo_sel),       // start pulse only when config write AND ChaCha selected
+        .start(cfg_we & algo_sel),  // start only when cfg write & ChaCha mode
         .algo_sel(algo_sel),
         .key(key),
         .nonce(nonce),
@@ -82,19 +80,12 @@ module chacha20_poly1305_core (
         .lens_done(lens_done_reg)
     );
 
-    // --------------------------
-    // Done signals muxed by algo_sel
-    // --------------------------
     assign aad_done  = algo_sel ? aad_done_reg  : 1'b0;
     assign pld_done  = algo_sel ? pld_done_reg  : 1'b0;
     assign lens_done = algo_sel ? lens_done_reg : 1'b0;
 
-    // --------------------------
-    // Output keystream
-    // --------------------------
     assign ks_valid = ks_valid_chacha;
     assign ks_data  = ks_data_chacha;
 
 endmodule
 `default_nettype wire
-
