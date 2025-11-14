@@ -31,9 +31,9 @@ module chacha20_poly1305_core (
 );
 
     // --------------------------
-    // Internal done flags
+    // Internal done flags (must be wire, not reg)
     // --------------------------
-    reg aad_done_reg, pld_done_reg, lens_done_reg;
+    wire aad_done_reg, pld_done_reg, lens_done_reg;
 
     // --------------------------
     // ChaCha keystream
@@ -57,22 +57,34 @@ module chacha20_poly1305_core (
     // --------------------------
     chacha_poly1305_adapter u_poly (
         .clk(clk), .rst_n(rst_n),
-        // Changed start pulse to depend on cfg_we AND algo_sel to prevent multiple drivers
-        .start(cfg_we & algo_sel),  // FIX: Only start when config write is valid AND ChaCha selected
-        .algo_sel(algo_sel),        // FIX: Forward correct algo_sel to adapter
-        .key(key), .nonce(nonce), .ctr_init(ctr_init),
-        .aad_valid(aad_valid), .aad_data(aad_data), .aad_keep(aad_keep), .aad_ready(aad_ready),
-        .pld_valid(pld_valid), .pld_data(pld_data), .pld_keep(pld_keep), .pld_ready(pld_ready),
-        .len_valid(len_valid), .len_block(len_block), .len_ready(len_ready),
-        .tag_pre_xor(tag_pre_xor), .tag_pre_xor_valid(tag_pre_xor_valid),
-        .tagmask(tagmask), .tagmask_valid(tagmask_valid),
-        .aad_done(aad_done_reg), .pld_done(pld_done_reg), .lens_done(lens_done_reg)
+        .start(cfg_we & algo_sel),       // start pulse only when config write AND ChaCha selected
+        .algo_sel(algo_sel),
+        .key(key),
+        .nonce(nonce),
+        .ctr_init(ctr_init),
+        .aad_valid(aad_valid),
+        .aad_data(aad_data),
+        .aad_keep(aad_keep),
+        .aad_ready(aad_ready),
+        .pld_valid(pld_valid),
+        .pld_data(pld_data),
+        .pld_keep(pld_keep),
+        .pld_ready(pld_ready),
+        .len_valid(len_valid),
+        .len_block(len_block),
+        .len_ready(len_ready),
+        .tag_pre_xor(tag_pre_xor),
+        .tag_pre_xor_valid(tag_pre_xor_valid),
+        .tagmask(tagmask),
+        .tagmask_valid(tagmask_valid),
+        .aad_done(aad_done_reg),
+        .pld_done(pld_done_reg),
+        .lens_done(lens_done_reg)
     );
 
     // --------------------------
-    // Done signals
+    // Done signals muxed by algo_sel
     // --------------------------
-    // FIX: Mux by algo_sel to avoid multiple drivers if AES is connected later
     assign aad_done  = algo_sel ? aad_done_reg  : 1'b0;
     assign pld_done  = algo_sel ? pld_done_reg  : 1'b0;
     assign lens_done = algo_sel ? lens_done_reg : 1'b0;
@@ -80,7 +92,6 @@ module chacha20_poly1305_core (
     // --------------------------
     // Output keystream
     // --------------------------
-    // FIX: ks_data width ensured only for ChaCha (512-bit)
     assign ks_valid = ks_valid_chacha;
     assign ks_data  = ks_data_chacha;
 
