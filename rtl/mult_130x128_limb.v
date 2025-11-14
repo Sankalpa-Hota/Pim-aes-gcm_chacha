@@ -1,4 +1,6 @@
 `timescale 1ns/1ps
+`default_nettype none
+
 module mult_130x128_limb(
     input  wire clk,
     input  wire reset_n,
@@ -13,35 +15,43 @@ module mult_130x128_limb(
     reg [257:0] a_shift;
     reg [127:0] b_reg;
     reg [7:0] bit_idx;
+    reg running;
 
     always @(posedge clk or negedge reset_n) begin
         if(!reset_n) begin
-            product_out <= 258'b0;
-            acc <= 258'b0;
-            a_shift <= 258'b0;
-            b_reg <= 128'b0;
-            bit_idx <= 8'd0;
-            busy <= 1'b0;
-            done <= 1'b0;
+            acc <= 0;
+            a_shift <= 0;
+            b_reg <= 0;
+            bit_idx <= 0;
+            product_out <= 0;
+            busy <= 0;
+            done <= 0;
+            running <= 0;
         end else begin
-            done <= 1'b0;
-            if(start && !busy) begin
+            done <= 0; // pulse
+            if(start && !running) begin
+                acc <= 0;
                 a_shift <= {128'b0, a_in};
                 b_reg <= b_in;
-                acc <= 258'b0;
-                bit_idx <= 8'd0;
-                busy <= 1'b1;
-            end else if(busy) begin
+                bit_idx <= 0;
+                busy <= 1;
+                running <= 1;
+            end else if(running) begin
+                // Perform multiply-add step
                 if(b_reg[0]) acc <= acc + a_shift;
                 a_shift <= a_shift << 1;
                 b_reg <= b_reg >> 1;
-                bit_idx <= bit_idx + 1'b1;
+                bit_idx <= bit_idx + 1;
+
+                // Done condition
                 if(bit_idx == 127) begin
                     product_out <= acc;
-                    busy <= 1'b0;
-                    done <= 1'b1;
+                    busy <= 0;
+                    done <= 1;  // single-cycle pulse
+                    running <= 0;
                 end
             end
         end
     end
 endmodule
+
