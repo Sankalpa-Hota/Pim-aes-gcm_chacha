@@ -81,44 +81,44 @@ module tb_chacha20_poly1305_core;
         wait(ks_valid);
         $display("[%0t] Got keystream block (ks_valid=%b):\nks_data = %h", $time, ks_valid, ks_data);
 
-        // Send 10 AAD blocks
+        // ---------------------------
+        // Send 10 AAD blocks safely
+        // ---------------------------
         for (i = 0; i < 10; i = i + 1) begin
             aad_data = $random;
             aad_keep = 16'hffff;
             aad_valid = 1;
-            @(posedge clk);
-            while (!aad_ready) @(posedge clk);
-            $display("[%0t] AAD[%0d]: %h", $time, i, aad_data);
+            wait(aad_ready);
             @(posedge clk);
             aad_valid = 0;
             wait(aad_done);
-            $display("[%0t] AAD[%0d] processed", $time, i);
+            $display("[%0t] AAD[%0d] processed: %h", $time, i, aad_data);
         end
 
-        // Send 10 Payload blocks
+        // ---------------------------
+        // Send 10 Payload blocks safely
+        // ---------------------------
         for (i = 0; i < 10; i = i + 1) begin
             pld_data = $random;
             pld_keep = 16'hffff;
             pld_valid = 1;
-            @(posedge clk);
-            while (!pld_ready) @(posedge clk);
-            $display("[%0t] PAYLOAD[%0d]: %h", $time, i, pld_data);
+            wait(pld_ready);
             @(posedge clk);
             pld_valid = 0;
             wait(pld_done);
-            $display("[%0t] PAYLOAD[%0d] processed", $time, i);
+            $display("[%0t] PAYLOAD[%0d] processed: %h", $time, i, pld_data);
         end
 
-        // Send length block
+        // ---------------------------
+        // Send length block safely
+        // ---------------------------
         len_block = 128'h00000000000000000000000000000080;
         len_valid = 1;
-        @(posedge clk);
-        while (!len_ready) @(posedge clk);
-        $display("[%0t] LEN block: %h", $time, len_block);
+        wait(len_ready);
         @(posedge clk);
         len_valid = 0;
         wait(lens_done);
-        $display("[%0t] Length block processed", $time);
+        $display("[%0t] Length block processed: %h", $time, len_block);
 
         // Wait for final tag
         wait(tag_pre_xor_valid && tagmask_valid);
@@ -131,5 +131,3 @@ module tb_chacha20_poly1305_core;
     end
 
 endmodule
-
-`default_nettype wire
