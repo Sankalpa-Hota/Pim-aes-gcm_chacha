@@ -193,7 +193,7 @@ module chacha_poly1305_adapter (
 
             REDUCE: if (reduce_done) begin
                 if (prev_stage == ST_AAD) next_state = PAYLD;
-                else if (prev_stage == ST_PAYLD) next_state = PAYLD;
+                else if (prev_stage == ST_PAYLD) next_state = (len_valid) ? LEN : PAYLD; // ✅ Updated
                 else if (prev_stage == ST_LEN) next_state = FINAL;
                 else next_state = IDLE;
             end
@@ -216,3 +216,4 @@ module chacha_poly1305_adapter (
 endmodule
 
 `default_nettype wire
+
