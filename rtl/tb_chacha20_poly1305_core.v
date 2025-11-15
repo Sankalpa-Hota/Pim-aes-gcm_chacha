@@ -4,8 +4,9 @@
 module tb_chacha20_poly1305_core;
 
     // Clock & reset
-    reg clk = 0;
-    reg rst_n = 0;
+    reg clk;
+    reg rst_n;
+    initial clk = 0;
     always #5 clk = ~clk;
 
     // DUT signals
@@ -38,7 +39,14 @@ module tb_chacha20_poly1305_core;
     reg algo_sel;
 
     integer i;
-    integer cycle_counter = 0;
+    integer cycle_counter;
+
+    // Arrays for AAD and payload blocks (Verilog style)
+    reg [127:0] aad_mem0, aad_mem1, aad_mem2, aad_mem3, aad_mem4;
+    reg [127:0] pld_mem0, pld_mem1, pld_mem2, pld_mem3, pld_mem4;
+
+    // Registers to store encrypted/decrypted payload
+    reg [127:0] pld_out;
 
     // Instantiate DUT
     chacha20_poly1305_core dut (
@@ -72,26 +80,23 @@ module tb_chacha20_poly1305_core;
         .algo_sel(algo_sel)
     );
 
-    // Sample deterministic data (5 AAD + 5 Payload blocks)
-    reg [127:0] aad_mem [0:4];
-    reg [127:0] pld_mem [0:4];
-
     initial begin
-        // deterministic example data
-        aad_mem[0] = 128'h00112233445566778899aabbccddeeff;
-        aad_mem[1] = 128'h0102030405060708090a0b0c0d0e0f10;
-        aad_mem[2] = 128'h1112131415161718191a1b1c1d1e1f20;
-        aad_mem[3] = 128'h2122232425262728292a2b2c2d2e2f30;
-        aad_mem[4] = 128'h3132333435363738393a3b3c3d3e3f40;
+        // Initialize memory
+        aad_mem0 = 128'h00112233445566778899aabbccddeeff;
+        aad_mem1 = 128'h0102030405060708090a0b0c0d0e0f10;
+        aad_mem2 = 128'h1112131415161718191a1b1c1d1e1f20;
+        aad_mem3 = 128'h2122232425262728292a2b2c2d2e2f30;
+        aad_mem4 = 128'h3132333435363738393a3b3c3d3e3f40;
 
-        pld_mem[0] = 128'hffeeddccbbaa99887766554433221100;
-        pld_mem[1] = 128'h0f0e0d0c0b0a09080706050403020100;
-        pld_mem[2] = 128'h1234567890abcdef1234567890abcdef;
-        pld_mem[3] = 128'hdeadbeefdeadbeefdeadbeefdeadbeef;
-        pld_mem[4] = 128'hcafebabecafebabecafebabecafebabe;
+        pld_mem0 = 128'hffeeddccbbaa99887766554433221100;
+        pld_mem1 = 128'h0f0e0d0c0b0a09080706050403020100;
+        pld_mem2 = 128'h1234567890abcdef1234567890abcdef;
+        pld_mem3 = 128'hdeadbeefdeadbeefdeadbeefdeadbeef;
+        pld_mem4 = 128'hcafebabecafebabecafebabecafebabe;
     end
 
     // Clock counter
+    initial cycle_counter = 0;
     always @(posedge clk) cycle_counter = cycle_counter + 1;
 
     initial begin
@@ -99,13 +104,15 @@ module tb_chacha20_poly1305_core;
         rst_n = 0;
         cfg_we = 0;
         ks_req = 0;
-        aad_valid = 0; pld_valid = 0; len_valid = 0;
+        aad_valid = 0;
+        pld_valid = 0;
+        len_valid = 0;
         algo_sel = 1'b1;
         #20;
         rst_n = 1;
 
         // Configure key/nonce/ctr
-        key = 256'h000102030405060708090a0b0c0d0e0f_101112131415161718191a1b1c1d1e1f;
+        key = 256'h000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f;
         nonce = 96'h000000090000004a00000000;
         ctr_init = 32'h1;
         cfg_we = 1;
@@ -117,49 +124,74 @@ module tb_chacha20_poly1305_core;
         @(posedge clk);
         ks_req = 0;
 
-        wait(ks_valid);
+        // Wait for ks_valid
+        wait (ks_valid);
         $display("[Cycle %0d] Keystream block (512-bit):", cycle_counter);
         $display("  KS[127:0]   = %h", ks_data[127:0]);
         $display("  KS[255:128] = %h", ks_data[255:128]);
         $display("  KS[383:256] = %h", ks_data[383:256]);
         $display("  KS[511:384] = %h", ks_data[511:384]);
 
-        // --- Feed 5 AAD blocks ---
+        // --- Feed AAD blocks ---
         for(i=0; i<5; i=i+1) begin
-            wait(aad_ready);
-            aad_valid <= 1;
-            aad_data <= aad_mem[i];
-            aad_keep <= 16'hFFFF;
             @(posedge clk);
-            aad_valid <= 0;
-            wait(aad_done);
-            $display("[Cycle %0d] AAD block %0d processed | data: %h", cycle_counter, i, aad_mem[i]);
+            aad_valid = 1;
+            case(i)
+                0: aad_data = aad_mem0;
+                1: aad_data = aad_mem1;
+                2: aad_data = aad_mem2;
+                3: aad_data = aad_mem3;
+                4: aad_data = aad_mem4;
+            endcase
+            aad_keep = 16'hFFFF;
+            @(posedge clk);
+            aad_valid = 0;
+
+            wait (aad_done == 1);
+            @(posedge clk);
+            $display("[Cycle %0d] AAD block %0d processed", cycle_counter, i);
         end
 
-        // --- Feed 5 Payload blocks ---
+        // --- Feed Payload blocks and XOR with keystream ---
         for(i=0; i<5; i=i+1) begin
-            wait(pld_ready);
-            pld_valid <= 1;
-            pld_data <= pld_mem[i];
-            pld_keep <= 16'hFFFF;
             @(posedge clk);
-            pld_valid <= 0;
-            wait(pld_done);
+            pld_valid = 1;
+            case(i)
+                0: pld_data = pld_mem0;
+                1: pld_data = pld_mem1;
+                2: pld_data = pld_mem2;
+                3: pld_data = pld_mem3;
+                4: pld_data = pld_mem4;
+            endcase
+            pld_keep = 16'hFFFF;
+            @(posedge clk);
+            pld_valid = 0;
 
-            // Encrypt payload: XOR with keystream
-            $display("[Cycle %0d] Payload block %0d input  = %h", cycle_counter, i, pld_mem[i]);
-            $display("[Cycle %0d] Payload block %0d encrypted = %h",
-                     cycle_counter, i, pld_mem[i] ^ ks_data[(i*128)+:128]);
+            wait (pld_done == 1);
+            @(posedge clk);
+
+            // XOR payload with keystream slice
+            case(i)
+                0: pld_out = pld_data ^ ks_data[127:0];
+                1: pld_out = pld_data ^ ks_data[255:128];
+                2: pld_out = pld_data ^ ks_data[383:256];
+                3: pld_out = pld_data ^ ks_data[511:384];
+                4: pld_out = pld_data ^ 128'h0; // No keystream left, example
+            endcase
+
+            $display("[Cycle %0d] Payload block %0d encrypted = %h", cycle_counter, i, pld_out);
         end
 
-        // --- Feed 1 LEN block ---
-        wait(len_ready);
-        len_valid <= 1;
-        len_block <= 128'h00000000000000000000000000000100; // 256 bits
+        // --- Feed LEN block ---
         @(posedge clk);
-        len_valid <= 0;
-        wait(lens_done);
-        $display("[Cycle %0d] LEN block processed | data: %h", cycle_counter, len_block);
+        len_valid = 1;
+        len_block = 128'h00000000000000000000000000000100;
+        @(posedge clk);
+        len_valid = 0;
+
+        wait (lens_done == 1);
+        @(posedge clk);
+        $display("[Cycle %0d] LEN block processed | data = %h", cycle_counter, len_block);
 
         // Wait for tag
         wait(tag_pre_xor_valid && tagmask_valid);
@@ -173,3 +205,4 @@ module tb_chacha20_poly1305_core;
 endmodule
 
 `default_nettype wire
+
