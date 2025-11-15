@@ -67,34 +67,34 @@ module chacha_keystream_unit (
             state_reg <= state_next;
             core_init_reg <= 1'b0;
             core_next_reg <= 1'b0;
+            ctr_reg <= ctr_next;
+
+            // Only update ks_data and ks_valid sequentially ✅
             ks_valid <= 1'b0;
             ks_data <= 512'h0;
-            ctr_reg <= ctr_next;
-        end
-    end
 
-    always @* begin
-        state_next = state_reg;
-        ctr_next = ctr_reg;
-        case (state_reg)
-            S_IDLE: begin
-                if (ks_req && core_ready) begin
-                    core_next_reg = 1'b1;
-                    state_next = S_WAIT;
+            case(state_reg)
+                S_IDLE: begin
+                    if (ks_req && core_ready) begin
+                        core_next_reg <= 1'b1;
+                        state_next <= S_WAIT;
+                    end else state_next <= S_IDLE;
                 end
-            end
-            S_WAIT: begin
-                if (core_data_valid) begin
-                    ks_data = core_data_out;
-                    ks_valid = 1'b1;
-                    ctr_next = ctr_reg + 1;
-                    state_next = S_OUT;
+                S_WAIT: begin
+                    if (core_data_valid) begin
+                        ks_data <= core_data_out;
+                        ks_valid <= 1'b1;
+                        ctr_next <= ctr_reg + 1;
+                        state_next <= S_OUT;
+                    end else begin
+                        state_next <= S_WAIT;
+                        ctr_next <= ctr_reg;
+                    end
                 end
-            end
-            S_OUT: begin
-                state_next = S_IDLE;
-            end
-        endcase
+                S_OUT: state_next <= S_IDLE;
+                default: state_next <= S_IDLE;
+            endcase
+        end
     end
 
 endmodule
