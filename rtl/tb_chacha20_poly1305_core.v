@@ -1,192 +1,176 @@
 `timescale 1ns/1ps
-`default_nettype none
 
 module tb_chacha20_poly1305_core;
 
-    // ------------------------
-    // Clock & reset
-    // ------------------------
-    reg clk = 0;
-    reg rst_n = 0;
-    always #5 clk = ~clk; // 100 MHz clock
+    reg clk, rst;
+    reg cs, we;
+    reg [7:0] addr;
+    reg [511:0] wdata;
+    wire [511:0] rdata;
 
-    // ------------------------
-    // Inputs
-    // ------------------------
-    reg [255:0] key;
-    reg [95:0]  nonce;
-    reg [31:0]  ctr_init;
-    reg cfg_we;
-    reg ks_req;
-    reg aad_valid;
-    reg [127:0] aad_data;
-    reg [15:0]  aad_keep;
-    reg pld_valid;
-    reg [127:0] pld_data;
-    reg [15:0]  pld_keep;
-    reg len_valid;
-    reg [127:0] len_block;
-    reg algo_sel;
+    integer cycles;
+    integer last_progress_cycle;
 
-    // ------------------------
-    // Outputs
-    // ------------------------
-    wire ks_valid;
-    wire [511:0] ks_data;
-    wire aad_ready, pld_ready, len_ready;
-    wire [127:0] tag_pre_xor;
-    wire tag_pre_xor_valid;
-    wire [127:0] tagmask;
-    wire tagmask_valid;
-    wire aad_done, pld_done, lens_done;
+    // Clock
+    initial clk = 0;
+    always #5 clk = ~clk;
 
-    // ------------------------
-    // DUT instantiation
-    // ------------------------
-    chacha20_poly1305_core dut (
-        .clk(clk), .rst_n(rst_n),
-        .key(key), .nonce(nonce), .ctr_init(ctr_init),
-        .cfg_we(cfg_we), .ks_req(ks_req),
-        .ks_valid(ks_valid), .ks_data(ks_data),
-        .aad_valid(aad_valid), .aad_data(aad_data), .aad_keep(aad_keep), .aad_ready(aad_ready),
-        .pld_valid(pld_valid), .pld_data(pld_data), .pld_keep(pld_keep), .pld_ready(pld_ready),
-        .len_valid(len_valid), .len_block(len_block), .len_ready(len_ready),
-        .tag_pre_xor(tag_pre_xor), .tag_pre_xor_valid(tag_pre_xor_valid),
-        .tagmask(tagmask), .tagmask_valid(tagmask_valid),
-        .aad_done(aad_done), .pld_done(pld_done), .lens_done(lens_done),
-        .algo_sel(algo_sel)
+    // DUT
+    chacha20_poly1305_bus dut(
+        .clk(clk),
+        .rst(rst),
+        .cs(cs),
+        .we(we),
+        .addr(addr),
+        .wdata(wdata),
+        .rdata(rdata)
     );
 
-    // ------------------------
-    // Payload array (4 blocks)
-    // ------------------------
-    reg [127:0] payload [0:3];
-    integer i;
 
-    // ------------------------
-    // Cycle counters
-    // ------------------------
-    integer cycle_count;
-    integer aad_cycles;
-    integer pld_cycles;
-    integer len_cycles;
-    integer final_cycles;
-
-    // ------------------------
-    // Stimulus
-    // ------------------------
+    // ================================
+    // Reset + Initialization
+    // ================================
     initial begin
-        // Reset
-        rst_n = 0;
-        cfg_we = 0; ks_req = 0;
-        aad_valid = 0; pld_valid = 0; len_valid = 0;
-        algo_sel = 1; // ChaCha mode
+        cycles = 0;
+        last_progress_cycle = 0;
 
-        key      = 256'h00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff;
-        nonce    = 96'h0102030405060708090a0b0c;
-        ctr_init = 32'h00000001;
+        rst = 1;
+        cs = 0;
+        we = 0;
+        addr = 0;
+        wdata = 0;
 
-        // 4 payload blocks (512 bits total)
-        payload[0] = 128'h11111111_22222222_33333333_44444444;
-        payload[1] = 128'h55555555_66666666_77777777_88888888;
-        payload[2] = 128'h99999999_aaaaaaaa_bbbbbbbb_cccccccc;
-        payload[3] = 128'hdddddddd_eeeeeeee_ffffffff_00000000;
+        repeat(10) @(posedge clk);
+        rst = 0;
+        repeat(10) @(posedge clk);
 
-        // Initialize counters
-        cycle_count = 0;
-        aad_cycles = 0;
-        pld_cycles = 0;
-        len_cycles = 0;
-        final_cycles = 0;
-
-        #20;
-        rst_n = 1;
-
-        // ------------------------
-        // Step 1: CONFIG write
-        // ------------------------
-        cfg_we = 1;
-        #10;
-        cfg_we = 0;
-
-        // ------------------------
-        // Step 2: KEYSTREAM request
-        // ------------------------
-        ks_req = 1;
-        #10;
-        ks_req = 0;
-
-        // ------------------------
-        // Step 3: AAD input
-        // ------------------------
-        aad_data = 128'hdeadbeef_01234567_89abcdef_00112233;
-        aad_keep = 16'hffff;
-        aad_valid = 1;
-        while(!aad_ready) begin
-            #10;
-            cycle_count = cycle_count + 1;
-            aad_cycles = aad_cycles + 1;
-        end
-        #10;
-        aad_valid = 0;
-        $display("[%0t] AAD sent in %0d cycles: data=%h", $time, aad_cycles, aad_data);
-
-        // ------------------------
-        // Step 4: Payload input (4 blocks)
-        // ------------------------
-        for(i = 0; i < 4; i = i + 1) begin
-            pld_data  = payload[i];
-            pld_keep  = 16'hffff;
-            pld_valid = 1;
-            pld_cycles = 0;
-            while(!pld_ready) begin
-                #10;
-                cycle_count = cycle_count + 1;
-                pld_cycles = pld_cycles + 1;
-            end
-            #10;
-            pld_valid = 0;
-            $display("[%0t] Payload block %0d sent in %0d cycles: data=%h", $time, i, pld_cycles, pld_data);
-        end
-
-        // ------------------------
-        // Step 5: Length block
-        // ------------------------
-        len_block = 128'h00000000_00000010_00000000_00000040; // Example: 16B AAD + 64B payload
-        len_valid = 1;
-        len_cycles = 0;
-        while(!len_ready) begin
-            #10;
-            cycle_count = cycle_count + 1;
-            len_cycles = len_cycles + 1;
-        end
-        #10;
-        len_valid = 0;
-        $display("[%0t] Length block sent in %0d cycles: data=%h", $time, len_cycles, len_block);
-
-        // ------------------------
-        // Step 6: Wait for outputs
-        // ------------------------
-        final_cycles = 0;
-        while(!tag_pre_xor_valid) begin
-            #10;
-            cycle_count = cycle_count + 1;
-            final_cycles = final_cycles + 1;
-        end
-        wait(aad_done & pld_done & lens_done);
-        $display("[%0t] Final tag generated in %0d cycles: tag=%h mask=%h", $time, final_cycles, tag_pre_xor, tagmask);
-
-        $display("[%0t] Total simulation cycles: %0d", $time, cycle_count);
-        $display("[%0t] Testbench completed", $time);
-        $finish;
+        $display("[TB] Starting ChaCha20-Poly1305 test...");
+        
+        send_aad(128'hdeadbeef0123456789abcdef00112233);
+        send_payload(128'h11111111222222223333333344444444);
     end
 
-    // ------------------------
-    // Monitor keystream & tag
-    // ------------------------
+
+    // ================================
+    // Global cycle counter + timeout
+    // ================================
     always @(posedge clk) begin
-        if(ks_valid) $display("[%0t] Keystream: %h", $time, ks_data);
+        cycles <= cycles + 1;
+
+        // Every 5000 cycles dump heartbeat
+        if (cycles % 5000 == 0) begin
+            $display("\n--- HEARTBEAT cycle=%0d ---", cycles);
+            dump_state();
+            $display("---------------------------------\n");
+        end
+
+        // Hard timeout
+        if (cycles > 2_000_000) begin
+            $display("[TB] TIMEOUT at cycle=%0d", cycles);
+            dump_state();
+            $finish;
+        end
     end
+
+
+    // ================================
+    // TASK: Send AAD block
+    // ================================
+    task send_aad(input [127:0] aad);
+        begin
+            @(posedge clk);
+            $display("[TB] Sending AAD: %h", aad);
+
+            cs = 1;
+            we = 1;
+            addr = 8'h10;    // example AAD address
+            wdata = {384'd0, aad};
+            last_progress_cycle = cycles;
+
+            @(posedge clk);
+            cs = 0; we = 0;
+
+            wait_for_progress("AAD");
+        end
+    endtask
+
+
+    // ================================
+    // TASK: Send Payload
+    // ================================
+    task send_payload(input [127:0] p);
+        begin
+            @(posedge clk);
+            $display("[TB] Sending Payload block: %h", p);
+
+            cs = 1;
+            we = 1;
+            addr = 8'h20;   // example payload address
+            wdata = {384'd0, p};
+            last_progress_cycle = cycles;
+
+            @(posedge clk);
+            cs = 0; we = 0;
+
+            wait_for_progress("PAYLOAD");
+        end
+    endtask
+
+
+
+    // ================================
+    // TASK: Wait for progress
+    // ================================
+    task wait_for_progress(input [32*8-1:0] name);
+        begin
+            fork
+                begin : timeout_block
+                    repeat(20000) @(posedge clk);
+                    $display("[TB][ERROR] %s processing STUCK for 20000 cycles!", name);
+                    dump_state();
+                    disable wait_block;
+                end
+
+                begin : wait_block
+                    wait (dut.core_inst.ks_valid || dut.core_inst.tag_valid);
+                    $display("[TB] %s processed OK at cycle %0d", name, cycles);
+                    disable timeout_block;
+                end
+            join
+        end
+    endtask
+
+
+    // ================================
+    // Dump internal DUT state
+    // ================================
+    task dump_state;
+        begin
+            $display("DUT STATE DUMP @ cycle=%0d", cycles);
+
+            $display("ChaCha core:");
+            $display("  ready        = %b", dut.core_inst.ready);
+            $display("  ks_valid     = %b", dut.core_inst.ks_valid);
+            $display("  ks_data[...] = %h", dut.core_inst.ks_data[511:480]);
+
+            $display("Poly1305 adapter:");
+            $display("  aad_busy     = %b", dut.core_inst.poly_adapter.aad_busy);
+            $display("  msg_busy     = %b", dut.core_inst.poly_adapter.msg_busy);
+            $display("  tag_pre_xor_valid = %b", dut.core_inst.poly_adapter.tag_pre_xor_valid);
+
+            $display("Multiplier:");
+            $display("  mult_busy    = %b", dut.core_inst.poly_adapter.mul_inst.busy);
+            $display("  mult_valid   = %b", dut.core_inst.poly_adapter.mul_inst.valid);
+
+            $display("Reducer:");
+            $display("  red_busy     = %b", dut.core_inst.poly_adapter.red_inst.busy);
+            $display("  red_valid    = %b", dut.core_inst.poly_adapter.red_inst.valid);
+
+            $display("Tag unit:");
+            $display("  tag_valid    = %b", dut.core_inst.tag_valid);
+            $display("  tag_output   = %h", dut.core_inst.tag_output);
+
+        end
+    endtask
 
 endmodule
-`default_nettype wire
