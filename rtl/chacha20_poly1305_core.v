@@ -1,4 +1,6 @@
+`timescale 1ns/1ps
 `default_nettype none
+
 module chacha20_poly1305_core (
     input  wire         clk,
     input  wire         rst_n,
@@ -30,12 +32,10 @@ module chacha20_poly1305_core (
     input  wire         algo_sel
 );
 
-    // Done flags (internal)
+    // internal done wires
     wire aad_done_reg, pld_done_reg, lens_done_reg;
 
-    // --------------------------
-    // ChaCha keystream
-    // --------------------------
+    // ChaCha keystream wires
     wire        ks_valid_chacha;
     wire [511:0] ks_data_chacha;
 
@@ -50,12 +50,9 @@ module chacha20_poly1305_core (
         .ks_data(ks_data_chacha)
     );
 
-    // --------------------------
-    // Poly1305 adapter
-    // --------------------------
     chacha_poly1305_adapter u_poly (
         .clk(clk), .rst_n(rst_n),
-        .start(cfg_we & algo_sel),  // start only when cfg write & ChaCha mode
+        .start(cfg_we & algo_sel),
         .algo_sel(algo_sel),
         .key(key),
         .nonce(nonce),
@@ -88,4 +85,5 @@ module chacha20_poly1305_core (
     assign ks_data  = ks_data_chacha;
 
 endmodule
+
 `default_nettype wire
