@@ -6,7 +6,7 @@ module tb_chacha20_poly1305_core;
     // Clock & Reset
     reg clk = 0;
     reg rst_n = 0;
-    always #5 clk = ~clk; // 100MHz clock
+    always #5 clk = ~clk; // 100 MHz
 
     // DUT signals
     reg  [255:0] key;
@@ -60,6 +60,11 @@ module tb_chacha20_poly1305_core;
     // Clock cycle counter
     always @(posedge clk) cycle_count = cycle_count + 1;
 
+    // Task to print block info
+    task print_block(input string blk_type, input integer index, input [127:0] data);
+        $display("[%0t] %s[%0d]: %h", $time, blk_type, index, data);
+    endtask
+
     // TB procedure
     initial begin
         // Initialize
@@ -75,50 +80,55 @@ module tb_chacha20_poly1305_core;
 
         // Configure core
         cfg_we = 1; #10; cfg_we = 0;
-        $display("[%0t] Configuring core", $time);
+        $display("[%0t] Configuring core with key=%h", $time, key);
 
         // Request keystream
         ks_req = 1; #10; ks_req = 0;
         wait(ks_valid);
-        $display("[%0t] Got keystream block:\nks_data = %h", $time, ks_data);
+        $display("[%0t] Got keystream block (ks_valid=%b):\nks_data = %h", $time, ks_valid, ks_data);
 
+        // --------------------------
         // Send 10 AAD blocks
+        // --------------------------
         for (i = 0; i < 10; i = i + 1) begin
-            aad_data = $random; // random data
+            aad_data = $random;
             aad_keep = 16'hffff;
             aad_valid = 1;
-            wait(aad_ready); // handshake
-            $display("[%0t] Sending AAD[%0d]: %h", $time, i, aad_data);
+            @(posedge clk);
+            while (!aad_ready) @(posedge clk); // wait handshake
+            print_block("AAD", i, aad_data);
             @(posedge clk);
             aad_valid = 0;
-            wait(aad_done); // optional debug
-            $display("[%0t] AAD[%0d] processed", $time, i);
         end
 
+        // --------------------------
         // Send 10 Payload blocks
+        // --------------------------
         for (i = 0; i < 10; i = i + 1) begin
             pld_data = $random;
             pld_keep = 16'hffff;
             pld_valid = 1;
-            wait(pld_ready);
-            $display("[%0t] Sending PAYLOAD[%0d]: %h", $time, i, pld_data);
+            @(posedge clk);
+            while (!pld_ready) @(posedge clk); // wait handshake
+            print_block("PAYLOAD", i, pld_data);
             @(posedge clk);
             pld_valid = 0;
-            wait(pld_done); // optional debug
-            $display("[%0t] PAYLOAD[%0d] processed", $time, i);
         end
 
-        // Send length block
+        // --------------------------
+        // Send Length block
+        // --------------------------
         len_block = 128'h00000000000000000000000000000080;
         len_valid = 1;
-        wait(len_ready);
-        $display("[%0t] Sending LEN block: %h", $time, len_block);
+        @(posedge clk);
+        while (!len_ready) @(posedge clk); // handshake
+        print_block("LEN", 0, len_block);
         @(posedge clk);
         len_valid = 0;
-        wait(lens_done);
-        $display("[%0t] Length block processed", $time);
 
-        // Wait for tag
+        // --------------------------
+        // Wait for final tag
+        // --------------------------
         wait(tag_pre_xor_valid && tagmask_valid);
         $display("[%0t] TAG PRE-XOR  = %h", $time, tag_pre_xor);
         $display("[%0t] TAG MASK     = %h", $time, tagmask);
