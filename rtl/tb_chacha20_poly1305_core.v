@@ -33,20 +33,17 @@ module tb_chacha20_poly1305_core;
     wire pld_done;
     wire lens_done;
 
-    // Dummy keystream counter for simulation
-    reg [511:0] ks_counter;
-    assign ks_valid = ks_req;
-    assign ks_data = ks_counter;
-
     // DUT instantiation
-    chacha_poly1305_adapter dut (
+    chacha20_poly1305_core dut (
         .clk(clk),
         .rst_n(rst_n),
-        .start(cfg_we),
-        .algo_sel(algo_sel),
         .key(key),
         .nonce(nonce),
         .ctr_init(ctr_init),
+        .cfg_we(cfg_we),
+        .ks_req(ks_req),
+        .ks_valid(ks_valid),
+        .ks_data(ks_data),
         .aad_valid(aad_valid),
         .aad_data(aad_data),
         .aad_keep(aad_keep),
@@ -64,7 +61,8 @@ module tb_chacha20_poly1305_core;
         .tagmask_valid(tagmask_valid),
         .aad_done(aad_done),
         .pld_done(pld_done),
-        .lens_done(lens_done)
+        .lens_done(lens_done),
+        .algo_sel(algo_sel)
     );
 
     // Clock generation
@@ -82,9 +80,6 @@ module tb_chacha20_poly1305_core;
     initial cycle = 0;
     always @(posedge clk) cycle = cycle + 1;
 
-    // Keystream counter
-    always @(posedge clk) if (ks_req) ks_counter <= ks_counter + 1;
-
     // Test procedure
     initial begin
         rst_n = 0; cfg_we = 0; ks_req = 0; algo_sel = 1;
@@ -97,16 +92,18 @@ module tb_chacha20_poly1305_core;
 
         #20 rst_n = 1;  // Release reset
 
+        // Start the Poly1305 flow
         @(posedge clk); cfg_we = 1;
         @(posedge clk); cfg_we = 0;
 
+        // Request one keystream block
         @(posedge clk); ks_req = 1;
         @(posedge clk); ks_req = 0;
 
-        // Feed AAD
-        while(!aad_done) begin
+        // Feed AAD blocks
+        while (!aad_done) begin
             @(posedge clk);
-            if(aad_ready) begin
+            if (aad_ready) begin
                 aad_valid <= 1;
                 aad_data <= $random;
                 aad_keep <= 16'hFFFF;
@@ -116,10 +113,10 @@ module tb_chacha20_poly1305_core;
         end
         aad_valid <= 0;
 
-        // Feed Payload
-        while(!pld_done) begin
+        // Feed Payload blocks
+        while (!pld_done) begin
             @(posedge clk);
-            if(pld_ready) begin
+            if (pld_ready) begin
                 pld_valid <= 1;
                 pld_data <= $random;
                 pld_keep <= 16'hFFFF;
@@ -130,9 +127,9 @@ module tb_chacha20_poly1305_core;
         pld_valid <= 0;
 
         // Feed LEN block
-        while(!lens_done) begin
+        while (!lens_done) begin
             @(posedge clk);
-            if(len_ready) begin
+            if (len_ready) begin
                 len_valid <= 1;
                 len_block <= 128'h00000000000000000000000000000100;
             end else begin
@@ -146,15 +143,21 @@ module tb_chacha20_poly1305_core;
         $display("Final Tag Pre-XOR: %h", tag_pre_xor);
         $display("Final Tagmask: %h", tagmask);
 
-        #50 $finish;
+        // Wait a few cycles to see keystream output
+        repeat (5) @(posedge clk);
+
+        $finish;
     end
 
     // Cycle monitor
     always @(posedge clk) begin
         $display("Cycle: %0d | ks_valid: %b | aad_ready: %b | pld_ready: %b | len_ready: %b | aad_done: %b | pld_done: %b | lens_done: %b",
                  cycle, ks_valid, aad_ready, pld_ready, len_ready, aad_done, pld_done, lens_done);
-        if(ks_valid) $display("   ks_data[127:0]: %h ...", ks_data[127:0]);
+        if (ks_valid) $display("   ks_data[127:0]: %h ...", ks_data[127:0]);
     end
 
 endmodule
+
+`default_nettype wire
+
 
