@@ -109,6 +109,7 @@ module chacha_poly1305_adapter (
                 s_key <= key[255:128];
                 acc <= 0; acc_next <= 0; acc_next_valid <= 0;
                 block_reg_valid <= 0;
+                aad_done <= 0; pld_done <= 0; lens_done <= 0;
             end
 
             // AAD block
@@ -177,7 +178,7 @@ module chacha_poly1305_adapter (
         end
     end
 
-    // Combinational next-state logic
+    // Combinational next-state logic (FIXED)
     always @* begin
         next_state = state;
         case (state)
@@ -192,16 +193,15 @@ module chacha_poly1305_adapter (
             REDUCE_WAIT: next_state = REDUCE;
 
             REDUCE: if (reduce_done) begin
-                if (prev_stage == ST_AAD) next_state = PAYLD;
-                else if (prev_stage == ST_PAYLD) next_state = (len_valid) ? LEN : PAYLD; // ✅ Updated
-                else if (prev_stage == ST_LEN) next_state = FINAL;
-                else next_state = IDLE;
+                case(prev_stage)
+                    ST_AAD:   next_state = PAYLD;
+                    ST_PAYLD: next_state = LEN; //  Always go to LEN after payload
+                    ST_LEN:   next_state = FINAL;
+                    default:  next_state = IDLE;
+                endcase
             end
 
-            PAYLD: begin
-                if (block_reg_valid) next_state = MUL_WAIT;
-                else if (len_valid) next_state = LEN;
-            end
+            PAYLD: if (block_reg_valid) next_state = MUL_WAIT;
 
             LEN: if (block_reg_valid) next_state = MUL_WAIT;
 
@@ -214,6 +214,4 @@ module chacha_poly1305_adapter (
     end
 
 endmodule
-
 `default_nettype wire
-
